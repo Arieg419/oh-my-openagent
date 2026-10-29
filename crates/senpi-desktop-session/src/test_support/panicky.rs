@@ -1,6 +1,7 @@
 //! The fake backend plus injected panics: the fake itself can only fail a
 //! call, and a transaction must also survive a backend that unwinds.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use image::RgbaImage;
@@ -31,11 +32,22 @@ impl Panics {
     }
 }
 
+/// Counts `watch_user_input` calls across every backend a factory built.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Watches(Arc<AtomicUsize>);
+
+impl Watches {
+    pub(crate) fn count(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
 pub(crate) struct PanickyFake {
     pub(crate) inner: FakeBackend,
     pub(crate) panics: Panics,
     pub(crate) awake: super::AwakeHolds,
     pub(crate) screen: super::FakeScreen,
+    pub(crate) watches: Watches,
 }
 
 impl Backend for PanickyFake {
@@ -151,5 +163,9 @@ impl Backend for PanickyFake {
     }
     fn screen_probe(&self) -> Option<Arc<dyn senpi_desktop_core::backend::ScreenProbe>> {
         Some(Arc::new(self.screen.clone()))
+    }
+    fn watch_user_input(&mut self) {
+        self.watches.0.fetch_add(1, Ordering::SeqCst);
+        self.inner.watch_user_input();
     }
 }

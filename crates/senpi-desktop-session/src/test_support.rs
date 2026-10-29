@@ -6,7 +6,7 @@ mod screen;
 
 use std::sync::Arc;
 
-pub(crate) use panicky::Panics;
+pub(crate) use panicky::{Panics, Watches};
 pub(crate) use screen::{AwakeHolds, FakeScreen};
 use parking_lot::Mutex;
 use senpi_desktop_backend_fake::{FakeBackend, FakeScenario, Faults, RecordingSink, SinkOp};
@@ -31,6 +31,7 @@ pub(crate) struct Harness {
     pub(crate) sink: RecordingSink,
     pub(crate) faults: Faults,
     pub(crate) panics: Panics,
+    pub(crate) watches: Watches,
     pub(crate) clock: Arc<FakeClock>,
     pub(crate) supervisor: Arc<Supervisor>,
     pub(crate) audits: Arc<Mutex<Vec<AuditEvent>>>,
@@ -46,6 +47,7 @@ struct Factory {
     panics: Panics,
     awake: AwakeHolds,
     screen: FakeScreen,
+    watches: Watches,
 }
 
 impl BackendFactory for Factory {
@@ -57,6 +59,7 @@ impl BackendFactory for Factory {
             panics: self.panics.clone(),
             awake: self.awake.clone(),
             screen: self.screen.clone(),
+            watches: self.watches.clone(),
         }))
     }
 }
@@ -78,6 +81,7 @@ pub(crate) fn session_factory(awake: &AwakeHolds, screen: &FakeScreen) -> impl B
         panics: Panics::default(),
         awake: awake.clone(),
         screen: screen.clone(),
+        watches: Watches::default(),
     }
 }
 
@@ -104,12 +108,14 @@ pub(crate) fn harness_with_slot(overlay: &Value, slot: Arc<crate::grant::Control
     };
     let panics = Panics::default();
     let (awake, screen) = (AwakeHolds::default(), FakeScreen::default());
+    let watches = Watches::default();
     let factory = Factory {
         scenario,
         built: Arc::clone(&built),
         panics: panics.clone(),
         awake: awake.clone(),
         screen: screen.clone(),
+        watches: watches.clone(),
     };
     let capabilities = Arc::new(Mutex::new(DesktopCapabilities::unavailable()));
     let display = (Arc::default(), crate::screen_notes::ScreenNotes::default());
@@ -121,6 +127,7 @@ pub(crate) fn harness_with_slot(overlay: &Value, slot: Arc<crate::grant::Control
         sink,
         faults,
         panics,
+        watches,
         clock,
         supervisor,
         audits,

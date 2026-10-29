@@ -43,6 +43,8 @@ pub(crate) struct Worker {
     pub(crate) control: Option<crate::grant::ControlGrant>,
     pub(crate) awake: Arc<DisplayAwake>,
     pub(crate) notes: ScreenNotes,
+    /// Whether this backend's watch of the user's own input was started.
+    pub(crate) watching_user_input: bool,
 }
 
 /// A mutating request's reply and the audit event it emitted.
@@ -78,6 +80,7 @@ impl Worker {
             control: None,
             awake,
             notes,
+            watching_user_input: false,
         };
         worker.install_screen_probe();
         worker.refresh_capabilities();
@@ -113,6 +116,7 @@ impl Worker {
             return self.refresh_capabilities();
         }
         self.backend = self.factory.create(&options);
+        self.watching_user_input = false;
         self.emergency = self.backend.as_ref().ok().and_then(|backend| backend.emergency_release());
         if let Some(release) = &self.emergency {
             if let Err(error) = self.safety.supervisor.register_emergency_release(release) {
@@ -157,6 +161,9 @@ impl Worker {
         }
         self.reconcile_grant();
         self.maybe_gc();
+        if crate::user_input_watch::reads_or_acts_on_an_app(&op) {
+            self.watch_user_input();
+        }
         let served = |audited: CoreResult<Audited>| audited.map(|(response, _audit)| response);
         // Every mutating request goes through `mutate`; reads bypass it.
         match op {

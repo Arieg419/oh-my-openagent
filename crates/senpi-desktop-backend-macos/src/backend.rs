@@ -13,10 +13,11 @@ use senpi_desktop_core::types::{
     CaptureCaps, DesktopCapabilities, DesktopDisplay, DesktopPoint, DesktopWindow, DisplaySelector,
     FrontWindow, Target,
 };
+use senpi_desktop_core::user_input::UserPresses;
 
 use crate::ax::{is_trusted, MacAx};
 use crate::capture::{MacCapture, Screencapture};
-use crate::input::{CanaryMode, CanaryResult, MacInput};
+use crate::input::{CanaryMode, CanaryResult, MacInput, UserInputWatch};
 
 mod capabilities;
 
@@ -29,6 +30,7 @@ pub struct MacosBackend {
     ax: MacAx,
     overlay: crate::overlay::Overlay,
     screen: std::sync::Arc<crate::screen::MacScreen>,
+    user_input: UserInputWatch,
 }
 
 impl MacosBackend {
@@ -40,6 +42,7 @@ impl MacosBackend {
             input: MacInput::new(CanaryMode::Session)?.with_overlay(overlay.clone()),
             ax: MacAx::with_overlay(overlay.clone()),
             overlay,
+            user_input: UserInputWatch::default(),
         })
     }
 
@@ -294,5 +297,13 @@ impl Backend for MacosBackend {
 
     fn screen_probe(&self) -> Option<std::sync::Arc<dyn senpi_desktop_core::backend::ScreenProbe>> {
         Some(self.screen.clone())
+    }
+
+    fn watch_user_input(&mut self) {
+        self.user_input.start();
+    }
+
+    fn take_user_presses(&mut self) -> UserPresses {
+        self.user_input.take()
     }
 }

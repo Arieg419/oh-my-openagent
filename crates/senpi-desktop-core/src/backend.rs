@@ -14,6 +14,7 @@ use crate::types::{
     CaptureCaps, DesktopCapabilities, DesktopDisplay, DesktopPoint, DesktopWindow, DisplaySelector, FrontWindow,
     ScreenState, Target,
 };
+use crate::user_input::UserPresses;
 
 /// Keeps the display awake until dropped (macOS: a
 /// `PreventUserIdleDisplaySleep` power assertion).
@@ -234,6 +235,16 @@ pub trait Backend: Send {
     /// Whether the interactive session is behind the lock screen.
     fn screen_locked(&mut self) -> CoreResult<bool> {
         Ok(false)
+    }
+
+    /// Starts watching the user's own key presses and clicks; idempotent.
+    /// Backends without a watch keep this no-op and report no
+    /// `interventionWatch`.
+    fn watch_user_input(&mut self) {}
+
+    /// The user's presses the watch recorded since the last call.
+    fn take_user_presses(&mut self) -> UserPresses {
+        UserPresses::default()
     }
 
     /// Starts keeping the display awake while the agent operates. `None` when

@@ -34,6 +34,7 @@ impl MacosBackend {
             stop_reason: canary_failed.then(|| CANARY_STOP_REASON.to_string()),
             display_asleep: self.screen.screen_state(None).display_asleep,
             legacy_capture: self.capture.legacy_capture(),
+            intervention_watch: Some(self.user_input.state()),
             ..DesktopCapabilities::unavailable()
         }
     }
