@@ -228,6 +228,9 @@ fn block_on(work: impl std::future::Future<Output = Result<(), String>>) -> Exit
     // A session thread stuck in a backend call must not hold the exit.
     runtime.shutdown_background();
     match outcome {
+        #[cfg(target_os = "macos")]
+        Ok(outcome) => outcome.code(),
+        #[cfg(not(target_os = "macos"))]
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => fail(&error),
     }

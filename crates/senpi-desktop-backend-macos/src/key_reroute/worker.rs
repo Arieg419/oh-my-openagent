@@ -25,6 +25,28 @@ impl Drop for Tap {
 
 struct Source(Ref);
 
+struct ContextOwner(*mut TapContext);
+
+impl ContextOwner {
+    fn new(context: TapContext) -> Self {
+        Self(Box::into_raw(Box::new(context)))
+    }
+
+    fn get_mut(&mut self) -> &mut TapContext {
+        // SAFETY: This is the sole owner. Worker borrows end before driving
+        // the run loop, where callbacks borrow through the same raw pointer.
+        unsafe { &mut *self.0 }
+    }
+}
+
+impl Drop for ContextOwner {
+    fn drop(&mut self) {
+        // SAFETY: The owning pointer came from Box::into_raw. This owner is
+        // declared before the ports, so their invalidation precedes this free.
+        unsafe { drop(Box::from_raw(self.0)) };
+    }
+}
+
 // An independent retain for an exit hook; invalidation is thread-safe and
 // never frees the worker's callback context.
 pub(super) struct ExitPort(Ref);
@@ -75,18 +97,18 @@ pub(super) fn run(
         let _ = ready.send(false);
         return;
     }
-    let mut context = TapContext {
+    let mut context = ContextOwner::new(TapContext {
         theft: Theft::new(user, target, mouse_buttons(), generation),
         chord: Chord::new(modifier_flags(), Instant::now()),
         focus_tap: ptr::null_mut(),
         key_tap: ptr::null_mut(),
         moved_events: 0,
         audit: None,
-    };
-    let context_ptr = ptr::from_mut(&mut context).cast();
+    });
+    let context_ptr = context.0.cast();
     let focus_mask = (1 << PROCESS_NOTIFICATION) | (1 << FLAGS_CHANGED);
-    // SAFETY: The stack context stays at this address through both port
-    // lifetimes; callbacks run only while this thread drives the run loop.
+    // SAFETY: The heap context stays alive through both port lifetimes;
+    // callbacks run only while this thread drives the run loop.
     let focus = unsafe {
         CGEventTapCreate(
             ANNOTATED_SESSION,
@@ -129,8 +151,8 @@ pub(super) fn run(
         focus_exit.invalidate();
         key_exit.invalidate();
     });
-    context.focus_tap = focus.0;
-    context.key_tap = key.0;
+    context.get_mut().focus_tap = focus.0;
+    context.get_mut().key_tap = key.0;
     // SAFETY: Both ports are live. A null allocation must not be added to the loop.
     let focus_source = unsafe { CFMachPortCreateRunLoopSource(ptr::null(), focus.0, 0) };
     if focus_source.is_null() {
@@ -157,17 +179,21 @@ pub(super) fn run(
         run_loop
     };
     let now = Instant::now();
-    let signals = context.signals(now);
-    context
-        .theft
-        .register(&mut REGISTRY.lock(), keyboard_holders(), signals, now);
-    context.audit = Some(AuditLease::arm(generation, audit));
+    {
+        let context = context.get_mut();
+        let signals = context.signals(now);
+        context
+            .theft
+            .register(&mut REGISTRY.lock(), keyboard_holders(), signals, now);
+        context.audit = Some(AuditLease::arm(generation, audit));
+    }
     let started = ready.send(true).is_ok();
     let mut ended_at = None;
     let mut reason = "keyboard-returned";
     while started && !halt.load(Ordering::Acquire) {
         // SAFETY: Sources and context stay alive until removed below.
         unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false) };
+        let context = context.get_mut();
         let now = Instant::now();
         if context.theft.holder == Holder::UserChose {
             reason = "user-choice";
@@ -206,8 +232,8 @@ pub(super) fn run(
     if halt.load(Ordering::Acquire) && reason == "keyboard-returned" {
         reason = "engine-exit";
     }
-    context.theft.end();
-    context.theft.publish(&mut REGISTRY.lock());
+    context.get_mut().theft.end();
+    context.get_mut().theft.publish(&mut REGISTRY.lock());
     // SAFETY: Remove sources before their references and callback context drop.
     unsafe {
         CFRunLoopRemoveSource(run_loop, focus_source.0, kCFRunLoopDefaultMode);
@@ -215,9 +241,9 @@ pub(super) fn run(
     }
     eprintln!(
         "computer use keyboard reroute finished: moved_events={} reason={reason}",
-        context.moved_events,
+        context.get_mut().moved_events,
     );
-    if let Some(audit) = &mut context.audit {
+    if let Some(audit) = &mut context.get_mut().audit {
         audit.disarm_reason(match reason {
             "user-choice" => DisarmReason::UserChoice,
             "target-visible" => DisarmReason::TargetVisible,
@@ -233,4 +259,33 @@ pub(super) fn run(
     drop(focus);
     drop(key_source);
     drop(focus_source);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn callback_and_worker_borrows_share_the_owned_heap_context() {
+        let mut owner = ContextOwner::new(TapContext {
+            theft: Theft::new(101, 202, [0; 6], 1),
+            chord: Chord::new(0, Instant::now()),
+            focus_tap: ptr::null_mut(),
+            key_tap: ptr::null_mut(),
+            moved_events: 0,
+            audit: None,
+        });
+        let callback = owner.0;
+        for expected in 1..=3 {
+            owner.get_mut().moved_events = expected;
+            // SAFETY: The worker borrow has ended, as it does before each
+            // run-loop callback, and the owning allocation remains live.
+            unsafe {
+                let context = &mut *callback;
+                assert_eq!(context.moved_events, expected);
+                context.moved_events += 1;
+            }
+            assert_eq!(owner.get_mut().moved_events, expected + 1);
+        }
+    }
 }

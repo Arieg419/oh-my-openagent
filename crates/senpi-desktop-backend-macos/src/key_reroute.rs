@@ -12,6 +12,7 @@ mod worker;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use senpi_desktop_core::key_reroute::audit::AuditSink;
@@ -19,6 +20,7 @@ use senpi_desktop_core::key_reroute::Registry;
 
 static REGISTRY: Mutex<Registry> = Mutex::new(Registry::new());
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+const START_TIMEOUT: Duration = Duration::from_secs(1);
 
 struct Running {
     halt: Arc<AtomicBool>,
@@ -101,8 +103,20 @@ impl KeyReroute {
             .name("desktop-key-reroute".into())
             .spawn(move || worker::run(user, target, generation, action_ended, stop, ready, audit))
             .ok()?;
-        owner.register(Running { halt, thread });
-        receive.recv().unwrap_or(false).then_some(Self { ended })
+        owner.register(Running {
+            halt: Arc::clone(&halt),
+            thread,
+        });
+        ready_within(&receive, &halt, START_TIMEOUT).then_some(Self { ended })
+    }
+}
+
+fn ready_within(receive: &mpsc::Receiver<bool>, halt: &AtomicBool, budget: Duration) -> bool {
+    if matches!(receive.recv_timeout(budget), Ok(true)) {
+        true
+    } else {
+        halt.store(true, Ordering::Release);
+        false
     }
 }
 
@@ -121,6 +135,31 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use senpi_desktop_core::key_reroute::audit::{AuditEvent, AuditLease};
+
+    #[test]
+    fn startup_requires_ready_and_stops_failed_disconnected_or_late_workers() {
+        for (message, disconnected, expected) in [
+            (Some(true), false, true),
+            (Some(false), false, false),
+            (None, true, false),
+            (None, false, false),
+        ] {
+            let (send, receive) = mpsc::sync_channel(1);
+            if let Some(message) = message {
+                send.send(message).unwrap();
+            }
+            let sender = if disconnected {
+                drop(send);
+                None
+            } else {
+                Some(send)
+            };
+            let halt = AtomicBool::new(false);
+            assert_eq!(ready_within(&receive, &halt, Duration::ZERO), expected);
+            assert_eq!(halt.load(Ordering::Acquire), !expected);
+            drop(sender);
+        }
+    }
 
     #[test]
     fn signal_cleanup_joins_the_owner_and_flushes_its_disarm_count() {

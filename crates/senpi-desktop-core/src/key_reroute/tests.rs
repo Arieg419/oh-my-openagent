@@ -102,6 +102,7 @@ impl Rig {
 const SYNTHETIC_EVENT_TAG: i64 = 1;
 
 mod classification;
+mod handoff;
 mod held;
 mod ownership;
 mod seeded;
