@@ -35,7 +35,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Every routing location of one layer, in the order listed above. */
-export function routingLocations(layer: unknown): readonly RoutingLocation[] {
+function routingLocations(layer: unknown): readonly RoutingLocation[] {
   if (!isRecord(layer)) return []
   const locations: RoutingLocation[] = []
   const add = (prefix: string, scope: Record<string, unknown>, profile?: string) => {
