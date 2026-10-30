@@ -45,8 +45,13 @@ export function trackBatchProgress(input: BatchProgressInput): BatchProgressTrac
   let emittedAt = 0
   let receivedChildEvent = false
   let closed = false
+  const launches = input.live.flatMap((start) => {
+    const launch = start.result.starting === true ? input.manager.whenLaunched?.(start.result.task_id) : undefined
+    return launch === undefined ? [] : [launch]
+  })
+  let launching = launches.length
   const emit = (): void => {
-    if (closed) return
+    if (closed || launching > 0) return
     emittedAt = Date.now()
     const results = input.live.map((start) => withLiveSpawnFacts(start.result, input.manager.get(start.result.task_id)))
     onUpdate({
@@ -72,7 +77,7 @@ export function trackBatchProgress(input: BatchProgressInput): BatchProgressTrac
     })
   }
   const schedule = (): void => {
-    if (closed) return
+    if (closed || launching > 0) return
     if (!receivedChildEvent) {
       receivedChildEvent = true
       emit()
@@ -95,9 +100,12 @@ export function trackBatchProgress(input: BatchProgressInput): BatchProgressTrac
     }),
   )
   emit()
-  // A launch still in flight at the start report lands its outcome on the record; publish it then.
-  for (const start of input.live) {
-    if (start.result.starting === true) void input.manager.whenLaunched?.(start.result.task_id).then(emit)
+  // Every running row needs its launched facts before the batch partial is published.
+  for (const launch of launches) {
+    void launch.then(() => {
+      launching--
+      emit()
+    })
   }
   return {
     settle(taskId, status) {

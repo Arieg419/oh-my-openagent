@@ -149,8 +149,10 @@ export async function runSpawn(
   let emittedAt = 0
   let receivedChildEvent = false
   let closed = false
+  const launch = started.starting === true ? deps.manager.whenLaunched?.(started.task_id) : undefined
+  let launching = launch !== undefined
   const emit = (): void => {
-    if (closed || onUpdate === undefined) return
+    if (closed || launching || onUpdate === undefined) return
     emittedAt = Date.now()
     onUpdate({
       content: [{ type: "text", text: progress.contentText() }],
@@ -158,7 +160,7 @@ export async function runSpawn(
     })
   }
   const schedule = (): void => {
-    if (closed || onUpdate === undefined) return
+    if (closed || launching || onUpdate === undefined) return
     if (!receivedChildEvent) {
       receivedChildEvent = true
       emit()
@@ -190,8 +192,11 @@ export async function runSpawn(
   } else {
     emit()
   }
-  // A launch still in flight at the start report lands its outcome on the record; publish it then.
-  if (started.starting === true) void deps.manager.whenLaunched?.(started.task_id).then(emit)
+  // Do not publish running partials with incomplete facts while the launch is still in flight.
+  if (launch !== undefined) void launch.then(() => {
+    launching = false
+    emit()
+  })
   const parent = deps.manager.findTaskByChildSession?.(ctx.sessionManager.getSessionId())
   const parked = parent === undefined ? undefined : deps.manager.concurrency?.park(parent.task_id, parent.notification.run_epoch)
   let promoted = false

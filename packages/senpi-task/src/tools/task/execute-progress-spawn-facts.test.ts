@@ -106,22 +106,32 @@ describe("progress partials carry the spawn facts once the launch settles, howev
         updates.push(update)
         if (row.facts(update.details).run_epoch === row.expected.run_epoch) published.resolve()
       }, CTX)
-      await withinBudget(subscribed.promise, "the foreground spawn never subscribed to its child")
-      expect(row.facts(latestDetails(updates)).effective_model).toBeUndefined()
+      try {
+        await withinBudget(subscribed.promise, "the foreground spawn never subscribed to its child")
+        // A child may publish progress before runner.start has returned its model facts.
+        if (row.started.kind === "started" && row.started.starting === true) {
+          listener?.({ type: "tool_execution_start", toolName: "read", args: { path: "src/early.ts" } })
+          expect(updates).toHaveLength(0)
+        } else {
+          expect(row.facts(latestDetails(updates)).effective_model).toBeUndefined()
+        }
 
-      // when: the launch settles after the start report went out
-      current = { ...current, notification: { ...current.notification, run_epoch: 2 }, resolved_model: FALLBACK, effective_model: EFFECTIVE }
-      launch.resolve()
-      if (row.started.kind === "started" && row.started.starting === true) {
-        await withinBudget(published.promise, "no partial carried the launched spawn facts after the launch settled")
+        // when: the launch settles after the start report went out
+        current = { ...current, notification: { ...current.notification, run_epoch: 2 }, resolved_model: FALLBACK, effective_model: EFFECTIVE }
+        launch.resolve()
+        if (row.started.kind === "started" && row.started.starting === true) {
+          await withinBudget(published.promise, "no partial carried the launched spawn facts after the launch settled")
+          expect(row.facts(latestDetails(updates))).toEqual(row.expected)
+        }
+        listener?.({ type: "tool_execution_start", toolName: "read", args: { path: "src/foo.ts" } })
+
+        // then
         expect(row.facts(latestDetails(updates))).toEqual(row.expected)
+      } finally {
+        launch.resolve()
+        completion.resolve({ ...current, status: "completed", final_response: "done" })
+        await execution
       }
-      listener?.({ type: "tool_execution_start", toolName: "read", args: { path: "src/foo.ts" } })
-
-      // then
-      expect(row.facts(latestDetails(updates))).toEqual(row.expected)
-      completion.resolve({ ...current, status: "completed", final_response: "done" })
-      await execution
     })
   }
 })
